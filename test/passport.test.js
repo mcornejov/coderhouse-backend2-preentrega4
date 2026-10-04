@@ -2,6 +2,7 @@ import { test, describe, before, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import request from 'supertest';
+import jwt from 'jsonwebtoken';
 import passport from 'passport';
 import { Strategy as LocalStrategy } from 'passport-local';
 import { Strategy as JwtStrategy } from 'passport-jwt';
@@ -66,6 +67,26 @@ describe('Integración de Passport', () => {
     assert.equal(res.status, 200);
     assert.deepEqual(res.body, { status: 'success', message: 'Login correcto' });
     assert.ok((res.headers['set-cookie'] ?? []).some((c) => c.startsWith('currentUser=')));
+  });
+
+  test('las credenciales solo se aceptan en el body, nunca por query string', async () => {
+    await request(app).post('/api/sessions/register').send(usuario);
+    const res = await request(app).post(`/api/sessions/login?email=${usuario.email}&password=${usuario.password}`);
+
+    assert.equal(res.status, 400);
+    assert.deepEqual(res.body, { status: 'error', message: 'Faltan campos obligatorios' });
+    assert.equal(res.headers['set-cookie'], undefined);
+  });
+
+  test('un token bien firmado pero con otro payload responde 401, no 500', async () => {
+    const sinId = jwt.sign({ sub: 'otro-sistema' }, process.env.JWT_SECRET, { algorithm: 'HS256' });
+    const texto = jwt.sign('solo-texto', process.env.JWT_SECRET, { algorithm: 'HS256' });
+
+    for (const token of [sinId, texto]) {
+      const res = await request(app).get('/api/sessions/current').set('Authorization', `Bearer ${token}`);
+      assert.equal(res.status, 401);
+      assert.deepEqual(res.body, { status: 'error', message: 'No autenticado' });
+    }
   });
 
   test('el registro vía estrategia sigue ignorando el rol del body', async () => {

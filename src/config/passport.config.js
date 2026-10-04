@@ -29,7 +29,9 @@ import {
 const CAMPOS_REGISTRO = ['first_name', 'last_name', 'email', 'password'];
 
 // passport-local busca por defecto "username"; aquí el identificador es el email.
-// passReqToCallback permite leer el resto del body (nombre, apellido) en el registro.
+// passReqToCallback permite leer el body completo: el registro necesita nombre y
+// apellido, y ambas estrategias validan las credenciales desde req.body (passport-local
+// también las aceptaría por query string, lo que dejaría contraseñas en URLs y logs).
 const OPCIONES_LOCAL = {
   usernameField: 'email',
   passwordField: 'password',
@@ -61,7 +63,9 @@ function extraerDesdeCookie(req) {
 export function crearEstrategias(usersRepository) {
   // Estrategia 'register': validación, normalización, unicidad, hash y rol por defecto.
   // Entrega el usuario creado (DTO sin contraseña) o el error de negocio correspondiente.
-  const register = new LocalStrategy(OPCIONES_LOCAL, async (req, email, password, done) => {
+  // Firma de passport-local con passReqToCallback: (req, username, password, done).
+  // username/password se ignoran: las credenciales se toman solo de req.body (ver arriba).
+  const register = new LocalStrategy(OPCIONES_LOCAL, async (req, _email, _password, done) => {
     try {
       const datos = req.body ?? {};
 
@@ -72,24 +76,24 @@ export function crearEstrategias(usersRepository) {
       }
 
       // 2. Formato de email y largo de contraseña
-      if (!isValidEmail(email)) {
+      if (!isValidEmail(datos.email)) {
         throw new BadRequestError('El email no tiene un formato válido');
       }
-      if (password.length < PASSWORD_MIN_LENGTH) {
+      if (datos.password.length < PASSWORD_MIN_LENGTH) {
         throw new BadRequestError(`La contraseña debe tener al menos ${PASSWORD_MIN_LENGTH} caracteres`);
       }
-      if (isPasswordTooLong(password)) {
+      if (isPasswordTooLong(datos.password)) {
         throw new BadRequestError(`La contraseña no puede superar los ${PASSWORD_MAX_BYTES} bytes`);
       }
 
       // 3. Normalización y unicidad del email
-      const emailNormalizado = normalizeEmail(email);
+      const emailNormalizado = normalizeEmail(datos.email);
       if (await usersRepository.existsByEmail(emailNormalizado)) {
         throw new ConflictError('El email ya está registrado');
       }
 
       // 4. La contraseña nunca se persiste en texto plano
-      const passwordHash = await hashPassword(password);
+      const passwordHash = await hashPassword(datos.password);
 
       // 5. Persistencia con whitelist de campos (el rol queda en su valor por defecto)
       const usuario = await usersRepository.create({
@@ -109,8 +113,9 @@ export function crearEstrategias(usersRepository) {
   // No firma el JWT ni toca la cookie: eso lo hace el controller tras el éxito.
   // Cualquier discrepancia falla con el mismo mensaje genérico (no se revela si
   // el email existe o si falló la contraseña).
-  const login = new LocalStrategy(OPCIONES_LOCAL, async (req, email, password, done) => {
+  const login = new LocalStrategy(OPCIONES_LOCAL, async (req, _email, _password, done) => {
     try {
+      const { email, password } = req.body ?? {};
       if (!isNonEmptyString(email) || !isNonEmptyString(password)) {
         throw new BadRequestError('Faltan campos obligatorios');
       }
@@ -145,11 +150,13 @@ export function crearEstrategias(usersRepository) {
       algorithms: [JWT_ALGORITHM],
     },
     (payload, done) => {
-      try {
-        return done(null, toSessionDTO(payload));
-      } catch (error) {
-        return done(error);
+      // La firma ya fue verificada; falta comprobar que el payload tenga la forma que
+      // emite este servidor. Un token firmado con el mismo secreto pero con otro
+      // contenido no autentica (401), en vez de provocar un error interno.
+      if (!isNonEmptyString(payload?.id) || !isNonEmptyString(payload?.email) || !isNonEmptyString(payload?.role)) {
+        return done(null, false);
       }
+      return done(null, toSessionDTO(payload));
     }
   );
 

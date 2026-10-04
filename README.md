@@ -287,14 +287,15 @@ Los casos anteriores (y otros, como token expirado, firmado con otro secreto o c
 pnpm test
 ```
 
-41 tests con MongoDB en memoria. Los 35 de la entrega anterior corren **sin modificar** sobre la
+43 tests con MongoDB en memoria. Los 35 de la entrega anterior corren **sin modificar** sobre la
 nueva implementación, lo que demuestra que el contrato externo se mantuvo: flujo completo
 registro → login → current → logout → 401, email duplicado, credenciales inválidas, `/current`
-sin cookie o con token manipulado/expirado, validación de configuración al arrancar. Los 6
+sin cookie o con token manipulado/expirado, validación de configuración al arrancar. Los 8
 nuevos (`test/passport.test.js`) verifican la integración: las tres estrategias quedan
 registradas con el tipo correcto, `app.js` no define estrategias, la estrategia de login no firma
-el JWT (lo hace el controller), los fallos responden JSON y el login también funciona como
-formulario.
+el JWT (lo hace el controller), los fallos responden JSON, el login también funciona como
+formulario, las credenciales no se aceptan por query string y un token bien firmado pero con
+otro payload responde `401`.
 
 ## Decisiones de seguridad
 
@@ -316,6 +317,11 @@ formulario.
   manipulado, expirado) responde `401 No autenticado` sin detallar la causa.
 - **Passport no firma tokens**: las estrategias solo autentican y entregan el usuario; emitir el
   JWT y manejar la cookie es responsabilidad del controller (capa HTTP).
+- **Credenciales solo en el body**: `passport-local` también las leería de la query string, pero
+  las estrategias validan desde `req.body` para que ninguna contraseña termine en URLs o logs.
+- **Payload del JWT verificado en forma, no solo en firma**: la estrategia `current` exige
+  `{ id, email, role }`; un token firmado con el mismo secreto pero con otro contenido no
+  autentica.
 - **Fail-Fast de configuración**: sin `JWT_SECRET` o `MONGO_URL` el servidor no arranca; un
   `JWT_EXPIRES_IN` inválido o cero también lo detiene, y un secreto de menos de 32 caracteres
   genera un aviso al iniciar.
